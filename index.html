@@ -1,29 +1,37 @@
 <!DOCTYPE html>
-<html>
+<html lang="ja">
 <head>
   <meta charset="utf-8">
-  <title>Barrier Defense - Hand Tracking Game</title>
+  <title>NEON BARRIER DEFENSE</title>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
   <style>
-    body { margin: 0; overflow: hidden; background: #000; font-family: 'Arial Black', sans-serif; }
-    canvas { position: absolute; width: 100vw; height: 100vh; object-fit: cover; }
-    #video_canvas { transform: scaleX(-1); opacity: 0.2; } /* 背景に薄くカメラ */
-    #ui { position: absolute; top: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; color: #0ff; }
-    #score-board { position: absolute; top: 20px; left: 20px; font-size: 30px; text-shadow: 0 0 10px #0ff; }
-    #hp-board { position: absolute; top: 20px; right: 20px; font-size: 30px; color: #f0f; }
-    #core { position: absolute; bottom: 0; width: 100%; height: 20px; background: linear-gradient(transparent, #0af); box-shadow: 0 -10px 20px #0af; }
-    #overlay-msg { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 40px; display: none; background: rgba(0,0,0,0.8); padding: 20px; border: 2px solid #0ff; }
+    body { margin: 0; overflow: hidden; background: #050505; font-family: 'Courier New', Courier, monospace; }
+    canvas { position: absolute; width: 100vw; height: 100vh; }
+    #video_canvas { transform: scaleX(-1); opacity: 0.15; filter: grayscale(1) contrast(200%); }
+    #ui { position: absolute; top: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; color: #00ffff; }
+    .stat { position: absolute; padding: 20px; text-shadow: 0 0 15px #00ffff; }
+    #score-display { top: 0; left: 0; font-size: 32px; }
+    #hp-display { top: 0; right: 0; font-size: 32px; color: #ff00ff; text-shadow: 0 0 15px #ff00ff; }
+    #core-line { position: absolute; bottom: 0; width: 100%; height: 5px; background: #00ffff; box-shadow: 0 0 20px #00ffff; }
+    #msg-overlay { 
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); 
+      text-align: center; display: none; background: rgba(0,0,0,0.9); padding: 40px; border: 2px solid #00ffff;
+    }
   </style>
 </head>
 <body>
 
 <div id="ui">
-  <div id="score-board">SCORE: 0</div>
-  <div id="hp-board">CORE HP: 10</div>
-  <div id="overlay-msg">GAME OVER<br><span style="font-size:20px">リロードして再挑戦</span></div>
-  <div id="core"></div>
+  <div id="score-display" class="stat">SCORE: 0000</div>
+  <div id="hp-display" class="stat">CORE HP: 10</div>
+  <div id="core-line"></div>
+  <div id="msg-overlay">
+    <h1 style="font-size: 48px; margin: 0;">SYSTEM FAILURE</h1>
+    <p style="font-size: 20px;">敵の侵入を許しました。再起動が必要です。</p>
+    <button onclick="location.reload()" style="pointer-events: auto; background: #00ffff; border: none; padding: 10px 20px; cursor: pointer; font-weight: bold;">REBOOT</button>
+  </div>
 </div>
 
 <video id="input_video" style="display:none;"></video>
@@ -31,116 +39,117 @@
 <canvas id="game_canvas"></canvas>
 
 <script>
-  const { Engine, Render, Runner, Bodies, Composite, Body, Vector } = Matter;
+  const { Engine, Render, Runner, Bodies, Composite, Body, Events, Vector } = Matter;
 
-  // --- ゲーム設定 ---
-  let score = 0;
-  let hp = 10;
-  let isGameOver = false;
-  const gameCanvas = document.getElementById('game_canvas');
-  const videoCanvas = document.getElementById('video_canvas');
-  const vCtx = videoCanvas.getContext('2d');
+  let score = 0, hp = 10, isGameOver = false;
+  const gCanvas = document.getElementById('game_canvas');
+  const vCanvas = document.getElementById('video_canvas');
+  const vCtx = vCanvas.getContext('2d');
 
   // --- 物理エンジン設定 ---
   const engine = Engine.create();
-  engine.world.gravity.y = 0.5; // 敵がゆっくり降ってくる
+  engine.world.gravity.y = 0.4;
 
   const render = Render.create({
-    canvas: gameCanvas,
-    engine: engine,
+    canvas: gCanvas, engine: engine,
     options: { width: window.innerWidth, height: window.innerHeight, wireframes: false, background: 'transparent' }
   });
 
-  // バリア本体（最初は画面外）
-  const barrier = Bodies.rectangle(-100, -100, 200, 20, { 
-    isStatic: true, 
-    render: { fillStyle: '#fff', strokeStyle: '#0ff', lineWidth: 5, glow: 20 } 
+  // バリアの作成（動的オブジェクトとして作成）
+  const barrier = Bodies.rectangle(window.innerWidth/2, -200, 250, 25, {
+    isStatic: true,
+    render: { fillStyle: '#ffffff', strokeStyle: '#00ffff', lineWidth: 8 }
   });
   Composite.add(engine.world, barrier);
 
-  // 敵の生成管理
-  let enemies = [];
-  function spawnEnemy() {
+  // 敵の管理
+  function createEnemy() {
     if (isGameOver) return;
-    const size = 20 + Math.random() * 20;
-    const enemy = Bodies.circle(Math.random() * window.innerWidth, -50, size, {
-      restitution: 0.8,
-      friction: 0,
-      render: { fillStyle: '#f05' }
+    const x = Math.random() * window.innerWidth;
+    const sides = Math.floor(Math.random() * 3) + 3; // 三角形〜五角形
+    const enemy = Bodies.polygon(x, -50, sides, 25, {
+      restitution: 1.1, friction: 0,
+      render: { fillStyle: 'transparent', strokeStyle: '#ff0055', lineWidth: 3 }
     });
-    enemies.push(enemy);
     Composite.add(engine.world, enemy);
+    
+    // 一定時間後に画面外判定
+    const checkStatus = setInterval(() => {
+      if (enemy.position.y > window.innerHeight) {
+        if (!isGameOver) {
+          hp--;
+          document.getElementById('hp-display').innerText = `CORE HP: ${hp}`;
+          if (hp <= 0) endGame();
+        }
+        Composite.remove(engine.world, enemy);
+        clearInterval(checkStatus);
+      } else if (enemy.position.y < -200) { // 上に弾き飛ばした場合
+        score += 100;
+        document.getElementById('score-display').innerText = `SCORE: ${score.toString().padStart(4, '0')}`;
+        Composite.remove(engine.world, enemy);
+        clearInterval(checkStatus);
+      }
+    }, 100);
   }
 
-  // ループ処理
-  setInterval(spawnEnemy, 1000);
+  function endGame() {
+    isGameOver = true;
+    document.getElementById('msg-overlay').style.display = 'block';
+  }
 
-  Events.on(engine, 'afterUpdate', () => {
-    if (isGameOver) return;
-    enemies.forEach((enemy, index) => {
-      // 画面下（コア）に到達したか判定
-      if (enemy.position.y > window.innerHeight) {
-        hp--;
-        document.getElementById('hp-board').innerText = `CORE HP: ${hp}`;
-        Composite.remove(engine.world, enemy);
-        enemies.splice(index, 1);
-        if (hp <= 0) {
-          isGameOver = true;
-          document.getElementById('overlay-msg').style.display = 'block';
-        }
-      }
-      // バリアで弾き飛ばした敵にスコア加算（一定以上の速度になったら）
-      if (enemy.velocity.y < -5) {
-        score += 10;
-        document.getElementById('score-board').innerText = `SCORE: ${score}`;
-      }
-    });
-  });
+  // レベルに合わせて敵の生成速度アップ
+  let spawnRate = 1200;
+  function gameLoop() {
+    createEnemy();
+    spawnRate = Math.max(300, 1200 - (score / 10));
+    setTimeout(gameLoop, spawnRate);
+  }
+  gameLoop();
 
   Render.run(render);
   Runner.run(Runner.create(), engine);
 
-  // --- MediaPipe 設定 ---
+  // --- MediaPipe 手の認識 ---
   function onResults(results) {
-    videoCanvas.width = window.innerWidth;
-    videoCanvas.height = window.innerHeight;
+    vCanvas.width = window.innerWidth;
+    vCanvas.height = window.innerHeight;
     vCtx.save();
-    vCtx.clearRect(0, 0, videoCanvas.width, videoCanvas.height);
-    vCtx.drawImage(results.image, 0, 0, videoCanvas.width, videoCanvas.height);
+    vCtx.clearRect(0, 0, vCanvas.width, vCanvas.height);
+    vCtx.drawImage(results.image, 0, 0, vCanvas.width, vCanvas.height);
     vCtx.restore();
 
-    if (results.multiHandLandmarks && results.multiHandLandmarks.length >= 2) {
-      // 両手がある場合、2点間にバリアを張る
-      const p1 = results.multiHandLandmarks[0][8];
-      const p2 = results.multiHandLandmarks[1][8];
-      
-      const x1 = (1 - p1.x) * window.innerWidth;
-      const y1 = p1.y * window.innerHeight;
-      const x2 = (1 - p2.x) * window.innerWidth;
-      const y2 = p2.y * window.innerHeight;
+    if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+      let targetX, targetY, targetAngle = 0;
 
-      const centerX = (x1 + x2) / 2;
-      const centerY = (y1 + y2) / 2;
-      const length = Math.hypot(x1 - x2, y1 - y2);
-      const angle = Math.atan2(y2 - y1, x2 - x1);
+      if (results.multiHandLandmarks.length >= 2) {
+        // 両手：2点間にバリアを配置
+        const h1 = results.multiHandLandmarks[0][8];
+        const h2 = results.multiHandLandmarks[1][8];
+        const x1 = (1 - h1.x) * window.innerWidth;
+        const y1 = h1.y * window.innerHeight;
+        const x2 = (1 - h2.x) * window.innerWidth;
+        const y2 = h2.y * window.innerHeight;
 
-      // 物理エンジンのバリアを更新
-      Body.setPosition(barrier, { x: centerX, y: centerY });
-      Body.setAngle(barrier, angle);
-      // 長さに合わせてスケールを変えるのは難しいため、今回は固定長か、位置の瞬時移動で対応
-      // ※簡易化のため位置と角度を同期
-    } else if (results.multiHandLandmarks && results.multiHandLandmarks.length === 1) {
-      // 片手の場合はその場に短いバリア
-      const p = results.multiHandLandmarks[0][8];
-      const x = (1 - p.x) * window.innerWidth;
-      const y = p.y * window.innerHeight;
-      Body.setPosition(barrier, { x, y });
-      Body.setAngle(barrier, 0);
+        targetX = (x1 + x2) / 2;
+        targetY = (y1 + y2) / 2;
+        targetAngle = Math.atan2(y2 - y1, x2 - x1);
+        // 両手の時はバリアを少し長く
+        Body.scale(barrier, 1.05, 1); 
+      } else {
+        // 片手：人差し指の位置に水平バリア
+        const h = results.multiHandLandmarks[0][8];
+        targetX = (1 - h.x) * window.innerWidth;
+        targetY = h.y * window.innerHeight;
+      }
+
+      // 物理オブジェクトを手の位置にスムーズに移動
+      Body.setPosition(barrier, { x: targetX, y: targetY });
+      Body.setAngle(barrier, targetAngle);
     }
   }
 
   const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
-  hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.5 });
+  hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.6 });
   hands.onResults(onResults);
 
   const camera = new Camera(videoElement, {
