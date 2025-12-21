@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>AI Hand Shooter - Virus Buster</title>
+  <title>AI Hand Shooter - Virus Buster v2</title>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
@@ -19,7 +19,7 @@
 
 <div id="ui">
   <div id="score">SCORE: 0</div>
-  <div id="msg">人差し指で狙え！</div>
+  <div id="msg">人差し指を立てて狙え！（他の指は閉じる）</div>
 </div>
 <div class="overlay"></div>
 
@@ -37,14 +37,12 @@
   let bullets = [];
   let frameCount = 0;
 
-  // 敵の生成
   function spawnEnemy() {
     enemies.push({
       x: Math.random() * window.innerWidth,
       y: Math.random() * window.innerHeight,
       size: 30 + Math.random() * 40,
-      hp: 1,
-      speed: 1 + (score / 500) // スコアに応じて加速
+      color: `hsl(${Math.random() * 60}, 100%, 50%)` // 赤〜黄色系の色
     });
   }
 
@@ -55,54 +53,65 @@
     canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
     canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
 
-    let fingerX = -100, fingerY = -100;
-
     if (results.multiHandLandmarks) {
       for (const landmarks of results.multiHandLandmarks) {
-        // 人差し指の先端
-        const tip = landmarks[8];
-        fingerX = tip.x * canvasElement.width;
-        fingerY = tip.y * canvasElement.height;
+        // --- 指の判定ロジック ---
+        // Y座標は「上が小さく、下が大きい」
+        const isIndexUp = landmarks[8].y < landmarks[6].y;   // 人差し指が立っている
+        const isMiddleDown = landmarks[12].y > landmarks[10].y; // 中指が寝ている
+        const isRingDown = landmarks[16].y > landmarks[14].y;   // 薬指が寝ている
 
-        // 照準の描画
-        canvasCtx.strokeStyle = '#0f0';
-        canvasCtx.lineWidth = 3;
-        canvasCtx.beginPath();
-        canvasCtx.arc(fingerX, fingerY, 20, 0, Math.PI*2);
-        canvasCtx.stroke();
+        // 人差し指だけが立っている時のみ実行
+        if (isIndexUp && isMiddleDown && isRingDown) {
+          const tip = landmarks[8];
+          const fx = tip.x * canvasElement.width;
+          const fy = tip.y * canvasElement.height;
 
-        // 弾の発射（一定間隔）
-        if (frameCount % 5 === 0) {
-          bullets.push({ x: fingerX, y: fingerY, r: 5 });
+          // 照準描画
+          canvasCtx.strokeStyle = '#0f0';
+          canvasCtx.lineWidth = 5;
+          canvasCtx.beginPath();
+          canvasCtx.arc(fx, fy, 25, 0, Math.PI*2);
+          canvasCtx.moveTo(fx - 35, fy); canvasCtx.lineTo(fx + 35, fy);
+          canvasCtx.moveTo(fx, fy - 35); canvasCtx.lineTo(fx, fy + 35);
+          canvasCtx.stroke();
+
+          // 弾の発射
+          if (frameCount % 4 === 0) {
+            bullets.push({ x: fx, y: fy, r: 5, color: '#0f0' });
+          }
         }
       }
     }
 
     // 弾の更新
     bullets.forEach((b, bi) => {
-      b.r += 10; // 弾が広がる演出
-      canvasCtx.strokeStyle = `rgba(0, 255, 0, ${1 - b.r/100})`;
+      b.r += 12;
+      canvasCtx.strokeStyle = b.color;
+      canvasCtx.globalAlpha = 1 - b.r/120;
+      canvasCtx.lineWidth = 2;
       canvasCtx.beginPath();
       canvasCtx.arc(b.x, b.y, b.r, 0, Math.PI*2);
       canvasCtx.stroke();
-      if (b.r > 100) bullets.splice(bi, 1);
+      if (b.r > 120) bullets.splice(bi, 1);
     });
+    canvasCtx.globalAlpha = 1.0;
 
     // 敵の更新
-    if (frameCount % 60 === 0) spawnEnemy();
+    if (frameCount % 50 === 0) spawnEnemy();
     enemies.forEach((e, ei) => {
-      // プレイヤー（指）に向かって少しずつ近づく演出
-      e.size += 0.5; // だんだん巨大化して迫ってくる
+      e.size += 0.6; // 迫りくる速度
       
-      // 描画
-      canvasCtx.fillStyle = 'rgba(255, 0, 50, 0.7)';
-      canvasCtx.strokeStyle = '#fff';
+      // 敵の描画
+      canvasCtx.fillStyle = e.color;
+      canvasCtx.shadowBlur = 15;
+      canvasCtx.shadowColor = e.color;
       canvasCtx.beginPath();
       canvasCtx.arc(e.x, e.y, e.size, 0, Math.PI*2);
       canvasCtx.fill();
-      canvasCtx.stroke();
+      canvasCtx.shadowBlur = 0;
 
-      // 当たり判定（弾と敵）
+      // 当たり判定
       bullets.forEach((b) => {
         const dist = Math.hypot(e.x - b.x, e.y - b.y);
         if (dist < e.size) {
@@ -112,8 +121,8 @@
         }
       });
 
-      // 敗北条件（敵が大きくなりすぎたら）
-      if (e.size > 200) {
+      // ゲームオーバー判定
+      if (e.size > 220) {
         enemies = [];
         score = 0;
         scoreElement.innerText = `GAME OVER - RESETTING`;
@@ -127,7 +136,12 @@
   const hands = new Hands({
     locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
   });
-  hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7 });
+  hands.setOptions({
+    maxNumHands: 1,
+    modelComplexity: 1,
+    minDetectionConfidence: 0.75, // 精度を少し上げた
+    minTrackingConfidence: 0.75
+  });
   hands.onResults(onResults);
 
   const camera = new Camera(videoElement, {
