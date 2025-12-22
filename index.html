@@ -2,62 +2,71 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Finger Basketball AI</title>
+    <title>Grab & Shoot Basketball</title>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
     <style>
-        body { margin: 0; background: #000; overflow: hidden; font-family: 'Arial Black', sans-serif; }
-        #view_video { position: fixed; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); z-index: 0; opacity: 0.8; }
-        canvas { position: fixed; top: 0; left: 0; z-index: 1; pointer-events: none; }
-        #ui { position: fixed; top: 20px; left: 20px; color: #fff; z-index: 2; text-shadow: 2px 2px 5px #000; }
-        #goal_msg { position: fixed; top: 40%; left: 50%; transform: translate(-50%, -50%); color: #ff0; font-size: 80px; display: none; z-index: 3; text-shadow: 0 0 20px #f00; }
+        body { margin: 0; background: #000; overflow: hidden; font-family: sans-serif; }
+        #view_video { position: fixed; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); opacity: 0.7; }
+        canvas { position: fixed; top: 0; left: 0; z-index: 1; }
+        #ui { position: fixed; top: 20px; left: 20px; color: #fff; z-index: 2; text-shadow: 2px 2px 5px #000; pointer-events: none; }
     </style>
 </head>
 <body>
     <video id="view_video" autoplay playsinline></video>
     <canvas id="canvas"></canvas>
     <div id="ui">
-        <div style="font-size: 24px;">SCORE</div>
-        <div id="score" style="font-size: 60px; color: #ff8000;">0</div>
-        <p>指先でボールを弾いてシュート！</p>
+        <h1 id="score">SCORE: 0</h1>
+        <p>指を閉じると「つかむ」、パッと開くと「シュート！」</p>
     </div>
-    <div id="goal_msg">GOAL!!</div>
 
     <script>
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
-        const scoreDisplay = document.getElementById('score');
-        const goalMsg = document.getElementById('goal_msg');
         const viewVideo = document.getElementById('view_video');
+        const scoreDisplay = document.getElementById('score');
 
         let width, height, score = 0;
-        let fingerX = 0, fingerY = 0, lastFingerX = 0, lastFingerY = 0;
+        let thumb = {x:0, y:0}, index = {x:0, y:0};
+        let isGrabbing = false;
 
-        // ボールの物理設定
-        let ball = { x: 200, y: 200, vx: 0, vy: 0, radius: 40 };
+        // ボールとゴールの設定
+        let ball = { x: 200, y: 500, vx: 0, vy: 0, r: 40, grabbed: false };
+        const hoop = { x: 0, y: 250, r: 60 };
         const gravity = 0.6;
-        const friction = 0.98;
-        const bounce = 0.7;
-
-        // ゴールの設定
-        const hoop = { x: 0, y: 200, w: 120, h: 10 };
 
         function resize() {
             width = canvas.width = window.innerWidth;
             height = canvas.height = window.innerHeight;
-            hoop.x = width - 200; // 右側に配置
+            hoop.x = width - 200;
         }
         window.addEventListener('resize', resize);
         resize();
 
-        // MediaPipe Hands 設定
         const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
-        hands.setOptions({ maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.5 });
+        hands.setOptions({ maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.7 });
+
         hands.onResults(results => {
             if (results.multiHandLandmarks?.length > 0) {
-                const tip = results.multiHandLandmarks[0][8];
-                fingerX = (1 - tip.x) * width;
-                fingerY = tip.y * height;
+                const marks = results.multiHandLandmarks[0];
+                // 親指先(4)と人差し指先(8)の座標
+                thumb = { x: (1 - marks[4].x) * width, y: marks[4].y * height };
+                index = { x: (1 - marks[8].x) * width, y: marks[8].y * height };
+
+                // 二本の指の距離を計算
+                const dist = Math.hypot(thumb.x - index.x, thumb.y - index.y);
+                const wasGrabbing = isGrabbing;
+                isGrabbing = dist < 50; // 50ピクセル以下なら「つかんだ」判定
+
+                // ボールのつかみ・離し判定
+                const distToBall = Math.hypot((thumb.x + index.x)/2 - ball.x, (thumb.y + index.y)/2 - ball.y);
+                if (isGrabbing && distToBall < 100) ball.grabbed = true;
+                if (!isGrabbing && ball.grabbed) {
+                    ball.grabbed = false;
+                    // 指を離した瞬間の勢いで飛ばす
+                    ball.vx = (index.x - lastIndexX) * 1.2;
+                    ball.vy = (index.y - lastIndexY) * 1.2;
+                }
             }
         });
 
@@ -67,83 +76,56 @@
         });
         camera.start();
 
-        function update() {
+        let lastIndexX = 0, lastIndexY = 0;
+
+        function loop() {
             ctx.clearRect(0, 0, width, height);
 
-            // ボールの物理演算
-            ball.vy += gravity;
-            ball.vx *= friction;
-            ball.vy *= friction;
-            ball.x += ball.vx;
-            ball.y += ball.vy;
+            if (ball.grabbed) {
+                // つかんでいる間は指の真ん中に移動
+                ball.x = (thumb.x + index.x) / 2;
+                ball.y = (thumb.y + index.y) / 2;
+                ball.vx = 0; ball.vy = 0;
+            } else {
+                // 物理演算
+                ball.vy += gravity;
+                ball.x += ball.vx;
+                ball.y += ball.vy;
+                ball.vx *= 0.99;
+                ball.vy *= 0.99;
 
-            // 壁と床の衝突
-            if (ball.y + ball.radius > height) {
-                ball.y = height - ball.radius;
-                ball.vy *= -bounce;
-            }
-            if (ball.x < 0 || ball.x > width) ball.vx *= -bounce;
-
-            // 指との衝突（弾く動作）
-            const dx = ball.x - fingerX;
-            const dy = ball.y - fingerY;
-            const distance = Math.hypot(dx, dy);
-            if (distance < ball.radius + 20) {
-                // 指の移動速度をボールに伝える
-                ball.vx = (fingerX - lastFingerX) * 1.5;
-                ball.vy = (fingerY - lastFingerY) * 1.5;
-                // 重なり防止
-                const angle = Math.atan2(dy, dx);
-                ball.x = fingerX + Math.cos(angle) * (ball.radius + 21);
-                ball.y = fingerY + Math.sin(angle) * (ball.radius + 21);
+                // 跳ね返り
+                if (ball.y > height - ball.r) { ball.y = height - ball.r; ball.vy *= -0.6; }
+                if (ball.x < ball.r || ball.x > width - ball.r) { ball.vx *= -0.6; }
             }
 
             // ゴール判定
-            if (ball.vx > 0 && ball.x > hoop.x && ball.x < hoop.x + hoop.w &&
-                ball.y > hoop.y && ball.y < hoop.y + 20 && ball.vy > 0) {
-                showGoal();
+            if (ball.vy > 0 && Math.hypot(ball.x - hoop.x, ball.y - hoop.y) < hoop.r) {
+                score++;
+                scoreDisplay.innerText = "SCORE: " + score;
+                ball.x = 200; ball.y = 500; ball.vx = 0; ball.vy = 0;
             }
 
-            // ゴールの描画（バックボードとリング）
-            ctx.lineWidth = 8;
-            ctx.strokeStyle = '#ff0000';
-            ctx.strokeRect(hoop.x, hoop.y, hoop.w, hoop.h);
-            ctx.strokeStyle = '#fff';
-            ctx.strokeRect(hoop.x + hoop.w, hoop.y - 80, 10, 150); // バックボード
+            // ゴール描画
+            ctx.strokeStyle = '#f00'; ctx.lineWidth = 10;
+            ctx.beginPath(); ctx.arc(hoop.x, hoop.y, hoop.r, 0, Math.PI); ctx.stroke();
+            ctx.fillStyle = 'rgba(255,255,255,0.2)'; ctx.fillRect(hoop.x + hoop.r, hoop.y - 100, 10, 200);
 
-            // ボールの描画
-            ctx.beginPath();
-            ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+            // ボール描画
+            ctx.shadowBlur = 20; ctx.shadowColor = ball.grabbed ? '#0f0' : '#ff8000';
             ctx.fillStyle = '#ff8000';
-            ctx.fill();
-            ctx.strokeStyle = '#000';
-            ctx.lineWidth = 2;
-            ctx.stroke();
+            ctx.beginPath(); ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2); ctx.fill();
 
-            // 指先の表示
-            ctx.strokeStyle = '#0ff';
-            ctx.lineWidth = 3;
-            ctx.beginPath();
-            ctx.arc(fingerX, fingerY, 15, 0, Math.PI * 2);
-            ctx.stroke();
+            // 指のポインター
+            ctx.shadowBlur = 0;
+            ctx.fillStyle = isGrabbing ? '#0f0' : '#fff';
+            ctx.beginPath(); ctx.arc(thumb.x, thumb.y, 10, 0, Math.PI*2); ctx.fill();
+            ctx.beginPath(); ctx.arc(index.x, index.y, 10, 0, Math.PI*2); ctx.fill();
 
-            lastFingerX = fingerX;
-            lastFingerY = fingerY;
-            requestAnimationFrame(update);
+            lastIndexX = index.x; lastIndexY = index.y;
+            requestAnimationFrame(loop);
         }
-
-        function showGoal() {
-            score += 1;
-            scoreDisplay.innerText = score;
-            goalMsg.style.display = 'block';
-            setTimeout(() => { goalMsg.style.display = 'none'; }, 1000);
-            // ゴールしたらボールを戻す
-            ball.x = 100;
-            ball.y = height / 2;
-            ball.vx = 0; ball.vy = 0;
-        }
-
-        update();
+        loop();
     </script>
 </body>
 </html>
