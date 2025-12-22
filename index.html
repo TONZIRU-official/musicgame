@@ -2,64 +2,96 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Discord All Group Clean-up</title>
+    <title>Discord Group Clean-up</title>
     <style>
-        body { font-family: sans-serif; padding: 20px; line-height: 1.6; background: #36393f; color: white; }
-        input, button { padding: 10px; margin: 5px 0; border-radius: 4px; border: none; }
-        input { width: 400px; background: #40444b; color: white; border: 1px solid #202225; }
-        button { background: #ed4245; color: white; cursor: pointer; font-weight: bold; }
-        button:disabled { background: #4e5058; cursor: not-allowed; }
-        #log { background: #2f3136; padding: 15px; height: 300px; overflow-y: scroll; margin-top: 10px; font-family: monospace; font-size: 12px; border: 1px solid #202225; }
-        .success { color: #3ba55c; }
-        .error { color: #ed4245; }
-        .info { color: #00aff4; }
+        body { font-family: sans-serif; padding: 20px; background: #36393f; color: white; }
+        .container { max-width: 600px; margin: auto; background: #2f3136; padding: 20px; border-radius: 8px; }
+        input, button { width: 100%; padding: 12px; margin: 10px 0; border-radius: 4px; border: none; box-sizing: border-box; }
+        input { background: #40444b; color: white; }
+        button { background: #5865f2; color: white; font-weight: bold; cursor: pointer; }
+        button:hover { background: #4752c4; }
+        button:disabled { background: #4f545c; cursor: not-allowed; }
+        #log { background: #202225; padding: 15px; height: 250px; overflow-y: scroll; font-family: monospace; font-size: 12px; border-radius: 4px; }
+        .err { color: #f04747; }
+        .suc { color: #43b581; }
     </style>
 </head>
 <body>
-    <h2>⚠️ Discord 全グループDM一括離脱ツール</h2>
-    <p>このツールは、参加している<strong>すべてのグループDM</strong>から離脱します。（個別DMは消えません）</p>
-    
-    <div>
-        <label>TOKEN:</label><br>
-        <input type="password" id="token" placeholder="Authorization Tokenを貼り付け">
-    </div>
-    <br>
-    <button id="startBtn">すべてのグループから離脱を開始</button>
+    <div class="container">
+        <h3>Discord グループDM一括整理</h3>
+        <p style="font-size: 0.8em; color: #b9bbbe;">※指定した名前と**完全に一致**するグループからのみ離脱します。</p>
+        
+        <label>1. Token</label>
+        <input type="password" id="token" placeholder="ここにトークンを貼り付け">
+        
+        <label>2. 対象のグループ名</label>
+        <input type="text" id="targetName" placeholder="例: 迷惑グループA">
+        
+        <button id="runBtn">実行する</button>
 
-    <div id="log">ログがここに表示されます...</div>
+        <div id="log">ログがここに表示されます...</div>
+    </div>
 
     <script>
-        const logDiv = document.getElementById('log');
-        const addLog = (msg, className = '') => {
+        const logBox = document.getElementById('log');
+        const print = (txt, cls='') => {
             const div = document.createElement('div');
-            div.className = className;
-            div.innerHTML = `${new Date().toLocaleTimeString()}: ${msg}`;
-            logDiv.appendChild(div);
-            logDiv.scrollTop = logDiv.scrollHeight;
+            div.className = cls;
+            div.innerText = `${new Date().toLocaleTimeString()}: ${txt}`;
+            logBox.appendChild(div);
+            logBox.scrollTop = logBox.scrollHeight;
         };
 
-        document.getElementById('startBtn').addEventListener('click', async () => {
+        document.getElementById('runBtn').addEventListener('click', async () => {
             const token = document.getElementById('token').value.trim();
-            if (!token) return alert('トークンを入力してください');
+            const target = document.getElementById('targetName').value.trim();
             
-            if (!confirm('本当に全てのグループDMから離脱しますか？この操作は取り消せません。')) return;
-
-            document.getElementById('startBtn').disabled = true;
+            if(!token || !target) return alert('入力が足りません');
+            document.getElementById('runBtn').disabled = true;
+            logBox.innerHTML = '';
 
             try {
-                addLog('全チャンネル情報を取得中...', 'info');
+                print('データ取得中...');
                 const res = await fetch('https://discord.com/api/v9/users/@me/channels', {
                     headers: { 'Authorization': token }
                 });
 
-                const channels = await res.json();
+                const data = await res.json();
 
-                if (!Array.isArray(channels)) {
-                    addLog(`❌ エラー: トークンが無効です。(Message: ${channels.message})`, 'error');
-                    document.getElementById('startBtn').disabled = false;
+                // 取得失敗のチェック
+                if (!Array.isArray(data)) {
+                    print(`❌ 失敗: ${data.message || 'トークンが不正です'}`, 'err');
+                    document.getElementById('runBtn').disabled = false;
                     return;
                 }
+
+                // 名前が一致するグループDM(type:3)を抽出
+                const targets = data.filter(c => c.type === 3 && (c.name === target));
                 
-                // type: 3 (グループDM) のみを抽出
-                const targets = channels.filter(c => c.type === 3);
-                addLog(`グループDMを ${targets.length
+                print(`対象グループを ${targets.length} 件見つけました。`);
+
+                for (const g of targets) {
+                    print(`離脱中: ${g.id}...`);
+                    const delRes = await fetch(`https://discord.com/api/v9/channels/${g.id}`, {
+                        method: 'DELETE',
+                        headers: { 'Authorization': token }
+                    });
+
+                    if (delRes.ok) {
+                        print(`✅ 成功: ${g.id}`, 'suc');
+                    } else {
+                        const errJson = await delRes.json();
+                        print(`❌ 失敗: ${errJson.message}`, 'err');
+                    }
+                    // 安全のため4秒待機
+                    await new Promise(r => setTimeout(r, 4000));
+                }
+                print('すべての処理が完了しました。');
+            } catch (e) {
+                print('エラー: ' + e.message, 'err');
+            }
+            document.getElementById('runBtn').disabled = false;
+        });
+    </script>
+</body>
+</html>
