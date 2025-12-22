@@ -2,130 +2,64 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Grab & Shoot Basketball</title>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <title>Discord All Group Clean-up</title>
     <style>
-        body { margin: 0; background: #000; overflow: hidden; font-family: sans-serif; }
-        #view_video { position: fixed; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); opacity: 0.7; }
-        canvas { position: fixed; top: 0; left: 0; z-index: 1; }
-        #ui { position: fixed; top: 20px; left: 20px; color: #fff; z-index: 2; text-shadow: 2px 2px 5px #000; pointer-events: none; }
+        body { font-family: sans-serif; padding: 20px; line-height: 1.6; background: #36393f; color: white; }
+        input, button { padding: 10px; margin: 5px 0; border-radius: 4px; border: none; }
+        input { width: 400px; background: #40444b; color: white; border: 1px solid #202225; }
+        button { background: #ed4245; color: white; cursor: pointer; font-weight: bold; }
+        button:disabled { background: #4e5058; cursor: not-allowed; }
+        #log { background: #2f3136; padding: 15px; height: 300px; overflow-y: scroll; margin-top: 10px; font-family: monospace; font-size: 12px; border: 1px solid #202225; }
+        .success { color: #3ba55c; }
+        .error { color: #ed4245; }
+        .info { color: #00aff4; }
     </style>
 </head>
 <body>
-    <video id="view_video" autoplay playsinline></video>
-    <canvas id="canvas"></canvas>
-    <div id="ui">
-        <h1 id="score">SCORE: 0</h1>
-        <p>指を閉じると「つかむ」、パッと開くと「シュート！」</p>
+    <h2>⚠️ Discord 全グループDM一括離脱ツール</h2>
+    <p>このツールは、参加している<strong>すべてのグループDM</strong>から離脱します。（個別DMは消えません）</p>
+    
+    <div>
+        <label>TOKEN:</label><br>
+        <input type="password" id="token" placeholder="Authorization Tokenを貼り付け">
     </div>
+    <br>
+    <button id="startBtn">すべてのグループから離脱を開始</button>
+
+    <div id="log">ログがここに表示されます...</div>
 
     <script>
-        const canvas = document.getElementById('canvas');
-        const ctx = canvas.getContext('2d');
-        const viewVideo = document.getElementById('view_video');
-        const scoreDisplay = document.getElementById('score');
+        const logDiv = document.getElementById('log');
+        const addLog = (msg, className = '') => {
+            const div = document.createElement('div');
+            div.className = className;
+            div.innerHTML = `${new Date().toLocaleTimeString()}: ${msg}`;
+            logDiv.appendChild(div);
+            logDiv.scrollTop = logDiv.scrollHeight;
+        };
 
-        let width, height, score = 0;
-        let thumb = {x:0, y:0}, index = {x:0, y:0};
-        let isGrabbing = false;
+        document.getElementById('startBtn').addEventListener('click', async () => {
+            const token = document.getElementById('token').value.trim();
+            if (!token) return alert('トークンを入力してください');
+            
+            if (!confirm('本当に全てのグループDMから離脱しますか？この操作は取り消せません。')) return;
 
-        // ボールとゴールの設定
-        let ball = { x: 200, y: 500, vx: 0, vy: 0, r: 40, grabbed: false };
-        const hoop = { x: 0, y: 250, r: 60 };
-        const gravity = 0.6;
+            document.getElementById('startBtn').disabled = true;
 
-        function resize() {
-            width = canvas.width = window.innerWidth;
-            height = canvas.height = window.innerHeight;
-            hoop.x = width - 200;
-        }
-        window.addEventListener('resize', resize);
-        resize();
+            try {
+                addLog('全チャンネル情報を取得中...', 'info');
+                const res = await fetch('https://discord.com/api/v9/users/@me/channels', {
+                    headers: { 'Authorization': token }
+                });
 
-        const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
-        hands.setOptions({ maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.7 });
+                const channels = await res.json();
 
-        hands.onResults(results => {
-            if (results.multiHandLandmarks?.length > 0) {
-                const marks = results.multiHandLandmarks[0];
-                // 親指先(4)と人差し指先(8)の座標
-                thumb = { x: (1 - marks[4].x) * width, y: marks[4].y * height };
-                index = { x: (1 - marks[8].x) * width, y: marks[8].y * height };
-
-                // 二本の指の距離を計算
-                const dist = Math.hypot(thumb.x - index.x, thumb.y - index.y);
-                const wasGrabbing = isGrabbing;
-                isGrabbing = dist < 50; // 50ピクセル以下なら「つかんだ」判定
-
-                // ボールのつかみ・離し判定
-                const distToBall = Math.hypot((thumb.x + index.x)/2 - ball.x, (thumb.y + index.y)/2 - ball.y);
-                if (isGrabbing && distToBall < 100) ball.grabbed = true;
-                if (!isGrabbing && ball.grabbed) {
-                    ball.grabbed = false;
-                    // 指を離した瞬間の勢いで飛ばす
-                    ball.vx = (index.x - lastIndexX) * 1.2;
-                    ball.vy = (index.y - lastIndexY) * 1.2;
+                if (!Array.isArray(channels)) {
+                    addLog(`❌ エラー: トークンが無効です。(Message: ${channels.message})`, 'error');
+                    document.getElementById('startBtn').disabled = false;
+                    return;
                 }
-            }
-        });
-
-        const camera = new Camera(viewVideo, {
-            onFrame: async () => await hands.send({image: viewVideo}),
-            width: 640, height: 480
-        });
-        camera.start();
-
-        let lastIndexX = 0, lastIndexY = 0;
-
-        function loop() {
-            ctx.clearRect(0, 0, width, height);
-
-            if (ball.grabbed) {
-                // つかんでいる間は指の真ん中に移動
-                ball.x = (thumb.x + index.x) / 2;
-                ball.y = (thumb.y + index.y) / 2;
-                ball.vx = 0; ball.vy = 0;
-            } else {
-                // 物理演算
-                ball.vy += gravity;
-                ball.x += ball.vx;
-                ball.y += ball.vy;
-                ball.vx *= 0.99;
-                ball.vy *= 0.99;
-
-                // 跳ね返り
-                if (ball.y > height - ball.r) { ball.y = height - ball.r; ball.vy *= -0.6; }
-                if (ball.x < ball.r || ball.x > width - ball.r) { ball.vx *= -0.6; }
-            }
-
-            // ゴール判定
-            if (ball.vy > 0 && Math.hypot(ball.x - hoop.x, ball.y - hoop.y) < hoop.r) {
-                score++;
-                scoreDisplay.innerText = "SCORE: " + score;
-                ball.x = 200; ball.y = 500; ball.vx = 0; ball.vy = 0;
-            }
-
-            // ゴール描画
-            ctx.strokeStyle = '#f00'; ctx.lineWidth = 10;
-            ctx.beginPath(); ctx.arc(hoop.x, hoop.y, hoop.r, 0, Math.PI); ctx.stroke();
-            ctx.fillStyle = 'rgba(255,255,255,0.2)'; ctx.fillRect(hoop.x + hoop.r, hoop.y - 100, 10, 200);
-
-            // ボール描画
-            ctx.shadowBlur = 20; ctx.shadowColor = ball.grabbed ? '#0f0' : '#ff8000';
-            ctx.fillStyle = '#ff8000';
-            ctx.beginPath(); ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2); ctx.fill();
-
-            // 指のポインター
-            ctx.shadowBlur = 0;
-            ctx.fillStyle = isGrabbing ? '#0f0' : '#fff';
-            ctx.beginPath(); ctx.arc(thumb.x, thumb.y, 10, 0, Math.PI*2); ctx.fill();
-            ctx.beginPath(); ctx.arc(index.x, index.y, 10, 0, Math.PI*2); ctx.fill();
-
-            lastIndexX = index.x; lastIndexY = index.y;
-            requestAnimationFrame(loop);
-        }
-        loop();
-    </script>
-</body>
-</html>
+                
+                // type: 3 (グループDM) のみを抽出
+                const targets = channels.filter(c => c.type === 3);
+                addLog(`グループDMを ${targets.length
