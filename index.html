@@ -150,7 +150,7 @@
                 timeDisplay.innerText = score;
 
                 // 物理計算
-                let grav = 0.007 + (score * 0.0001);
+                let grav = 0.004 + (score * 0.0001);
                 poleVel += Math.sin(poleAngle) * grav;
                 poleVel -= (fingerX - lastFingerX) * 0.002;
                 poleVel *= 0.98;
